@@ -618,7 +618,8 @@
         .eq('room_key', roomKey)
         .then(function (res) {
           if (res && res.error) { setSync('local'); localOnly = true; return; }
-          if (!localOnly) setSync('on');
+          localOnly = false;
+          setSync('on');
         });
       if (p && p.catch) p.catch(function () { setSync('local'); localOnly = true; });
     } catch (e) { setSync('local'); localOnly = true; }
@@ -630,9 +631,11 @@
   }
   function applyRemote(remote) {
     if (!remote || typeof remote !== 'object') return;
+    var next = normalizeState(remote);
+    if (!localOnly && JSON.stringify(next) === JSON.stringify(state)) return;
     applyingRemote = true;
     try {
-      state = normalizeState(remote);
+      state = next;
       saveCache();
       renderAll();
     } catch (e) {
