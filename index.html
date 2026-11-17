@@ -140,10 +140,11 @@
   .datefield input[type=date]:focus{outline:none;}
   .datefield input[type=date]::-webkit-calendar-picker-indicator{opacity:.45;cursor:pointer;margin-left:2px;}
   .datefield .ph{
-    position:absolute;left:30px;top:50%;transform:translateY(-50%);
+    position:absolute;left:30px;right:26px;top:1px;bottom:1px;
+    display:flex;align-items:center;background:#FDFAFB;border-radius:11px;
     font-size:13.5px;font-weight:700;color:var(--ink-3);pointer-events:none;
   }
-  .datefield.has .ph{display:none;}
+  .datefield.has .ph,.datefield:focus-within .ph{display:none;}
   .datefield .clear{
     border:0;background:#EFE4E8;color:var(--ink-2);border-radius:99px;
     width:19px;height:19px;line-height:1;font-size:11px;font-weight:900;
@@ -608,7 +609,7 @@
     if (!roomKey) return;
     var c = sb();
     if (!c) { setSync('local'); return; }
-    state.updatedAt = state.updatedAt || Date.now();
+    state.updatedAt = Date.now();
     var snap;
     try { snap = JSON.parse(JSON.stringify(state)); } catch (e) { return; }
     try {
@@ -735,6 +736,8 @@
       if (code === 'NOROOM') {
         forgetPin();
         showGate(true, '코드가 맞지 않아요. 다시 확인해 주세요.', true);
+        var gi = el('#gatePin');
+        if (gi) { gi.value = ''; try { gi.focus(); } catch (e2) {} }
       } else if (code === 'NO_LIB' || code === 'LIB') {
         var cached = loadCache();
         if (isAuto && cached) { state = cached; renderAll(); showGate(false); setSync('local'); localOnly = true; }
