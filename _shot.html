@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<title>shot</title>
+<style>
+  html,body{margin:0;padding:0;background:#DED7DA;}
+  iframe{border:0;display:block;background:#fff;box-shadow:0 8px 30px rgba(0,0,0,.18);}
+</style>
+</head>
+<body>
+<iframe id="f" src="./" scrolling="yes"></iframe>
+<script>
+  var q = new URLSearchParams(location.search);
+  var w = parseInt(q.get('w') || '390', 10);
+  var h = parseInt(q.get('h') || '844', 10);
+  if (!(w > 200 && w < 4000)) w = 390;
+  if (!(h > 300 && h < 4000)) h = 844;
+  var f = document.getElementById('f');
+  f.style.width = w + 'px';
+  f.style.height = h + 'px';
+  f.setAttribute('width', w);
+  f.setAttribute('height', h);
+  document.title = 'shot ' + w + 'x' + h;
+</script>
+</body>
+</html>
