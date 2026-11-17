@@ -394,6 +394,7 @@
 
     <footer>
       <span class="foot-note" id="updatedLine"></span>
+      <span class="foot-note" id="ttlNote">완료한 일은 2일 뒤 자동으로 지워져요</span>
       <button class="linkbtn" id="changeCode" type="button">코드 다시 입력</button>
     </footer>
   </main>
@@ -412,6 +413,9 @@
   var ROOM_SALT = 'todo-dashboard-v1:';
   var CACHE_KEY = 'todo-dashboard-v1';
   var PIN_KEY = 'todo-dashboard-v1-pin';
+  /* 완료 체크한 항목은 이만큼(48시간) 지나면 목록에서 완전히 지운다 */
+  var DONE_TTL_MS = 2 * 24 * 60 * 60 * 1000;
+  var SWEEP_EVERY_MS = 60 * 1000;
 
   /* ============ 상태 ============ */
   var state = { version: 1, items: [], updatedAt: 0 };
@@ -535,6 +539,7 @@
     var out = { version: 1, items: [], updatedAt: 0 };
     if (!raw || typeof raw !== 'object') return out;
     out.updatedAt = Number(raw.updatedAt) || 0;
+    var stamp = out.updatedAt || Date.now();
     var list = Array.isArray(raw.items) ? raw.items : [];
     for (var i = 0; i < list.length; i++) {
       var it = list[i];
@@ -543,14 +548,21 @@
       if (!text.trim()) continue;
       var pri = it.pri === 'high' || it.pri === 'low' ? it.pri : 'mid';
       var due = parseDue(it.due) ? String(it.due) : null;
+      var done = !!it.done;
+      /* 완료 시각: completedAt → doneTs(예전 이름) → 저장 시각 순으로 보정.
+         이미 완료된 항목에 시각이 비어 있을 때만 채우고, 미완료 항목은 건드리지 않는다. */
+      var completedAt = done
+        ? (Number(it.completedAt) || Number(it.doneTs) || stamp)
+        : null;
       out.items.push({
         id: String(it.id || uid()),
         text: text,
         due: due,
         pri: pri,
-        done: !!it.done,
+        done: done,
         ts: Number(it.ts) || Date.now(),
-        doneTs: it.done ? (Number(it.doneTs) || null) : null
+        completedAt: completedAt,
+        doneTs: completedAt
       });
     }
     return out;
@@ -564,6 +576,36 @@
   }
   function saveCache() {
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  /* ============ 완료 후 48시간 자동 삭제 ============ */
+  function isExpired(it, now) {
+    return !!(it && it.done && it.completedAt && (now - it.completedAt) >= DONE_TTL_MS);
+  }
+  function hasExpiredDone(items, now) {
+    var t = now || Date.now();
+    for (var i = 0; i < items.length; i++) if (isExpired(items[i], t)) return true;
+    return false;
+  }
+  /* 만료된 항목을 state에서 완전히 빼낸다. 지운 게 없으면 0을 돌려주고 아무것도 하지 않는다. */
+  function pruneExpired(now) {
+    var t = now || Date.now(), kept = [], dropped = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      if (isExpired(state.items[i], t)) { dropped++; continue; }
+      kept.push(state.items[i]);
+    }
+    if (!dropped) return 0;
+    state.items = kept;
+    if (view.editing && !find(view.editing)) view.editing = null;
+    state.updatedAt = t;
+    return dropped;
+  }
+  /* 지운 게 있을 때만 저장하고 서버로도 알린다(다른 기기에서도 같이 사라지게). */
+  function sweepExpired(now) {
+    if (!pruneExpired(now)) return 0;
+    saveCache();
+    renderAll();
+    queuePush();
+    return 1;
   }
   function savedPin() {
     try { return localStorage.getItem(PIN_KEY) || ''; } catch (e) { return ''; }
@@ -632,16 +674,21 @@
   function applyRemote(remote) {
     if (!remote || typeof remote !== 'object') return;
     var next = normalizeState(remote);
-    if (!localOnly && JSON.stringify(next) === JSON.stringify(state)) return;
+    var same = !localOnly && JSON.stringify(next) === JSON.stringify(state);
+    if (same && !hasExpiredDone(state.items)) return;
     applyingRemote = true;
+    var dropped = 0;
     try {
       state = next;
+      dropped = pruneExpired();
       saveCache();
       renderAll();
     } catch (e) {
     } finally {
       applyingRemote = false;
     }
+    /* 서버에서 받은 상태에 만료 항목이 있었으면 정리한 결과를 다시 올린다 */
+    if (dropped) queuePush();
   }
   function watchRoom() {
     var c = sb();
@@ -684,6 +731,7 @@
       }
       if (localOnly) {
         state = normalizeState(remote);
+        pruneExpired();
         saveCache();
         renderAll();
         queuePush();
@@ -725,6 +773,7 @@
       applyingRemote = true;
       state = normalizeState(row.state);
       applyingRemote = false;
+      var prunedOnJoin = pruneExpired();
       rememberPin(pin);
       joined = true; localOnly = false;
       saveCache();
@@ -733,6 +782,7 @@
       gateMsg('');
       watchRoom();
       setSync('on');
+      if (prunedOnJoin) queuePush();
       return true;
     }).catch(function (err) {
       var code = (err && err.message) || '';
@@ -1010,7 +1060,7 @@
     var hasAny = state.items.length > 0;
     if (!empty.hidden) {
       var t = el('p', empty), s = el('span', empty);
-      if (view.filter === 'done') { t.textContent = '완료한 일이 아직 없어요'; s.textContent = '체크하면 여기에 쌓여요.'; }
+      if (view.filter === 'done') { t.textContent = '완료한 일이 아직 없어요'; s.textContent = '체크하면 여기에 쌓이고, 2일 뒤 자동으로 지워져요.'; }
       else if (view.filter === 'active') { t.textContent = '남은 일이 없어요 🎉'; s.textContent = '전부 끝냈어요!'; }
       else if (!hasAny) { t.textContent = '여기는 비어 있어요'; s.textContent = '위에서 할 일을 추가해 보세요.'; }
       else { t.textContent = '표시할 항목이 없어요'; s.textContent = ''; }
@@ -1036,7 +1086,9 @@
     var it = find(id);
     if (!it) return;
     it.done = !it.done;
-    it.doneTs = it.done ? Date.now() : null;
+    var at = it.done ? Date.now() : null;
+    it.completedAt = at;
+    it.doneTs = at;
     touch();
   }
   function find(id) {
@@ -1127,7 +1179,7 @@
       state.items.push({
         id: uid(), text: v.slice(0, 200),
         due: el('#addDue').value || null,
-        pri: addPri, done: false, ts: Date.now(), doneTs: null
+        pri: addPri, done: false, ts: Date.now(), completedAt: null, doneTs: null
       });
       input.value = '';
       el('#addDue').value = '';
@@ -1165,10 +1217,14 @@
     });
     /* 다른 기기 변경 따라잡기 */
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && roomKey) resync();
+      if (document.hidden) return;
+      sweepExpired();
+      if (roomKey) resync();
     });
     window.addEventListener('online', function () { if (roomKey) resync(); });
     window.addEventListener('focus', function () { if (roomKey && document.hasFocus()) resync(); });
+    /* 화면을 켜 둔 채로도 48시간이 지나면 스스로 지운다 */
+    setInterval(function () { sweepExpired(); }, SWEEP_EVERY_MS);
   }
 
   function submitGate() {
@@ -1185,7 +1241,10 @@
   /* ============ 시작 ============ */
   function boot() {
     var cached = loadCache();
-    if (cached) state = cached;
+    if (cached) {
+      state = cached;
+      if (pruneExpired()) saveCache();
+    }
     renderAll();
     bind();
     var pin = savedPin();
